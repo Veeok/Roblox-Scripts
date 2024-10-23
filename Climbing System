@@ -1,0 +1,131 @@
+-- Local Script inside StarterCharacterScripts
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local CollectionService = game:GetService("CollectionService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local rootPart = character:WaitForChild("HumanoidRootPart")
+local Leg = character:WaitForChild("LeftLowerLeg") or character:WaitForChild("RightLowerLeg")
+
+-- Configurable settings 
+local climbSpeed = 1 -- Speed
+local activateClimbDistance = 2 -- Wall Distance to activate climbing
+local dashSpeed = 1 -- Side To Side Speed | Adjust Accordingly
+local pushAwayDistance = 3 -- Distance to push away from the wall when jumping
+
+-- State Variables
+local isClimbing = false
+local currentClimbSurface = nil
+local climbTag = "Climbable"
+local climbFolder = workspace:FindFirstChild("ClimbableSurfaces")
+
+-- Remote Event for climbing synchronization (for multiplayer)
+local climbEvent = ReplicatedStorage:WaitForChild("ClimbingEvent")
+
+-- Function to detect if a surface is climbable
+local function detectClimbableSurface()
+	local ray = Ray.new(Leg.Position, rootPart.CFrame.LookVector * activateClimbDistance) -- Detecting surface ahead
+	local part = workspace:FindPartOnRay(ray)
+
+	if part and (CollectionService:HasTag(part, climbTag) or (climbFolder and part:IsDescendantOf(climbFolder))) then
+		return part
+	end
+	return nil
+end
+
+-- Function to start climbing
+local function startClimbing(surface)
+	if isClimbing then return end
+	isClimbing = true
+	humanoid.PlatformStand = true -- Disable normal physics-based movement
+	currentClimbSurface = surface
+	rootPart.Anchored = true -- Anchor the player to the climbable surface
+
+	-- Set the character to face the wall
+	pcall(function()
+		local lookAtPosition = currentClimbSurface.CFrame + (currentClimbSurface.CFrame * -1) -- Face the wall
+		rootPart.CFrame = CFrame.new(rootPart.Position, lookAtPosition) -- Set character orientation to face the wall
+	end)
+	climbEvent:FireServer(true) -- Notify server that player is climbing
+end
+
+-- Function to stop climbing
+local function stopClimbing()
+	if not isClimbing then return end
+	isClimbing = false
+	humanoid.PlatformStand = false -- Re-enable normal movement
+	rootPart.Anchored = false -- Unanchor the player so they can move freely
+	humanoid:ChangeState(Enum.HumanoidStateType.Freefall) -- Allow freefall
+	currentClimbSurface = nil
+	climbEvent:FireServer(false) -- Notify server that player stopped climbing
+end
+
+-- Function to handle climbing movement
+local function handleClimbingMovement()
+	if not isClimbing or not currentClimbSurface then return end
+
+	local moveDirection = Vector3.new()
+
+	if UIS:IsKeyDown(Enum.KeyCode.W) then
+		moveDirection = moveDirection + Vector3.new(0, climbSpeed, 0) -- Move up
+	end
+	if UIS:IsKeyDown(Enum.KeyCode.S) then
+		moveDirection = moveDirection + Vector3.new(0, -climbSpeed, 0) -- Move down
+	end
+	if UIS:IsKeyDown(Enum.KeyCode.A) then
+		moveDirection = moveDirection + Vector3.new(-climbSpeed * dashSpeed, 0, 0) -- Move left
+	end
+	if UIS:IsKeyDown(Enum.KeyCode.D) then
+		moveDirection = moveDirection + Vector3.new(climbSpeed * dashSpeed, 0, 0) -- Move right
+	end
+
+	-- Directly modify the player's position while climbing
+	rootPart.CFrame = rootPart.CFrame * CFrame.new(moveDirection * 0.1)
+end
+
+-- Function to detach player from the wall (e.g., when jumping off or stopping climbing)
+local function detachFromWall()
+	if isClimbing then
+		-- Move the player away from the wall
+		local pushAwayDirection = (rootPart.Position - currentClimbSurface.Position).unit * pushAwayDistance
+		rootPart.CFrame = rootPart.CFrame + pushAwayDirection -- Push the character away from the wall
+		stopClimbing()
+	end
+end
+
+-- Heartbeat loop for climbing logic
+RunService.RenderStepped:Connect(function()
+	-- Only detect climbable surface if not currently climbing
+	if not isClimbing then
+		local surface = detectClimbableSurface()
+		if surface then
+			-- Start climbing if we're near a climbable surface
+			startClimbing(surface)
+		end
+	end
+
+	-- Handle climbing movement continuously
+	handleClimbingMovement()
+end)
+
+-- Input handling for detaching from the wall
+UIS.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+
+	if input.UserInputType == Enum.UserInputType.Keyboard then
+		if input.KeyCode == Enum.KeyCode.Space then
+			detachFromWall()
+		end
+	end
+end)
+
+-- Ensure to stop climbing when there's no climbable surface detected
+RunService.RenderStepped:Connect(function()
+	if isClimbing and not detectClimbableSurface() then
+		stopClimbing()
+	end
+end)
