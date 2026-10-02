@@ -12,6 +12,28 @@ return function(config)
     local CoreGui = game:GetService("CoreGui")
 
     local player = Players.LocalPlayer
+    local env = (type(getgenv) == "function" and getgenv()) or _G
+    local singletonKey = "__VEEOK_SAVEINSTANCE_UI_031026"
+
+    local previous = rawget(env, singletonKey)
+    if type(previous) == "table" and type(previous.Destroy) == "function" then
+        pcall(previous.Destroy, "reload")
+    elseif typeof(previous) == "Instance" then
+        pcall(function()
+            previous:Destroy()
+        end)
+    end
+    env[singletonKey] = nil
+
+    local destroyed = false
+    local busy = false
+    local runId = 0
+    local connections = {}
+    local threads = {}
+    local gui
+    local controller
+    local saveCallback = config.onSave
+    local unloadCallback = config.onUnload
 
     local palette = {
         bg = Color3.fromRGB(15, 16, 21),
@@ -54,6 +76,9 @@ return function(config)
     end
 
     local function tween(object, duration, props)
+        if destroyed or not object or not object.Parent then
+            return nil
+        end
         local animation = TweenService:Create(
             object,
             TweenInfo.new(duration, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
@@ -61,6 +86,37 @@ return function(config)
         )
         animation:Play()
         return animation
+    end
+
+    local function bind(signal, callback)
+        local connection = signal:Connect(function(...)
+            if destroyed then
+                return
+            end
+            callback(...)
+        end)
+        connections[#connections + 1] = connection
+        return connection
+    end
+
+    local function spawnTracked(callback)
+        local thread = task.spawn(function()
+            if not destroyed then
+                callback()
+            end
+        end)
+        threads[#threads + 1] = thread
+        return thread
+    end
+
+    local function delayTracked(seconds, callback)
+        local thread = task.delay(seconds, function()
+            if not destroyed then
+                callback()
+            end
+        end)
+        threads[#threads + 1] = thread
+        return thread
     end
 
     local function sanitize(value)
@@ -107,13 +163,59 @@ return function(config)
     end
 
     local parent = resolveParent()
-
     local old = parent:FindFirstChild("SaveInstanceUI031026")
     if old then
-        old:Destroy()
+        pcall(function()
+            old:Destroy()
+        end)
     end
 
-    local gui = new("ScreenGui", {
+    local function destroy(reason)
+        if destroyed then
+            return
+        end
+
+        destroyed = true
+        busy = false
+        runId += 1
+
+        for _, connection in ipairs(connections) do
+            pcall(function()
+                if connection.Connected then
+                    connection:Disconnect()
+                end
+            end)
+        end
+        table.clear(connections)
+
+        if type(task.cancel) == "function" then
+            for _, thread in ipairs(threads) do
+                pcall(task.cancel, thread)
+            end
+        end
+        table.clear(threads)
+
+        local unload = unloadCallback
+        unloadCallback = nil
+        saveCallback = nil
+
+        if env[singletonKey] == controller then
+            env[singletonKey] = nil
+        end
+
+        if gui and gui.Parent then
+            pcall(function()
+                gui:Destroy()
+            end)
+        end
+        gui = nil
+
+        if type(unload) == "function" then
+            pcall(unload, reason or "destroy")
+        end
+    end
+
+    gui = new("ScreenGui", {
         Name = "SaveInstanceUI031026",
         ResetOnSpawn = false,
         IgnoreGuiInset = false,
@@ -146,13 +248,15 @@ return function(config)
     })
 
     local toastOrder = 0
-
     local function toast(kind, title, message, duration)
+        if destroyed then
+            return nil
+        end
+
         kind = kind or "info"
         title = tostring(title or "Notice")
         message = tostring(message or "")
         duration = tonumber(duration) or 3.6
-
         toastOrder += 1
 
         local color = palette.accent
@@ -177,7 +281,7 @@ return function(config)
         corner(item, 10)
         stroke(item, 0.25)
 
-        local bar = new("Frame", {
+        new("Frame", {
             Size = UDim2.new(0, 4, 1, 0),
             BackgroundColor3 = color,
             BorderSizePixel = 0,
@@ -218,22 +322,21 @@ return function(config)
             BackgroundTransparency = 0,
         })
 
-        task.delay(duration, function()
-            if not item.Parent then
-                return
+        delayTracked(duration, function()
+            if item.Parent then
+                tween(item, 0.2, {
+                    Size = UDim2.fromOffset(0, 72),
+                    BackgroundTransparency = 1,
+                })
+                delayTracked(0.22, function()
+                    if item.Parent then
+                        item:Destroy()
+                    end
+                end)
             end
-            tween(item, 0.2, {
-                Size = UDim2.fromOffset(0, 72),
-                BackgroundTransparency = 1,
-            })
-            task.delay(0.22, function()
-                if item.Parent then
-                    item:Destroy()
-                end
-            end)
         end)
 
-        return item, bar
+        return item
     end
 
     local main = new("Frame", {
@@ -426,6 +529,7 @@ return function(config)
         Parent = modeCard,
     })
     corner(modeHolder, 9)
+
     new("UIPadding", {
         PaddingLeft = UDim.new(0, 6),
         PaddingRight = UDim.new(0, 6),
@@ -433,6 +537,7 @@ return function(config)
         PaddingBottom = UDim.new(0, 6),
         Parent = modeHolder,
     })
+
     new("UIListLayout", {
         FillDirection = Enum.FillDirection.Horizontal,
         Padding = UDim.new(0, 6),
@@ -469,7 +574,7 @@ return function(config)
         })
         corner(button, 7)
         modeButtons[mode] = button
-        button.MouseButton1Click:Connect(function()
+        bind(button.MouseButton1Click, function()
             state.mode = mode
             refreshModes()
         end)
@@ -549,7 +654,7 @@ return function(config)
         })
         corner(knob, 9)
 
-        toggle.MouseButton1Click:Connect(function()
+        bind(toggle.MouseButton1Click, function()
             state[key] = not state[key]
             local enabled = state[key]
             tween(toggle, 0.15, { BackgroundColor3 = enabled and palette.accent or palette.off })
@@ -656,10 +761,13 @@ return function(config)
     end
 
     local function refreshPath()
+        if destroyed then
+            return
+        end
         pathValue.Text = currentPath()
     end
 
-    fileBox.FocusLost:Connect(function()
+    bind(fileBox.FocusLost, function()
         fileBox.Text = sanitize(fileBox.Text)
         refreshPath()
     end)
@@ -667,6 +775,10 @@ return function(config)
     refreshPath()
 
     local function setStatus(text, kind, message)
+        if destroyed then
+            return
+        end
+
         kind = kind or "success"
         local color = palette.success
         if kind == "warning" then
@@ -686,6 +798,10 @@ return function(config)
 
     local progress = 0
     local function setProgress(value, label, color)
+        if destroyed then
+            return
+        end
+
         value = math.clamp(tonumber(value) or 0, 0, 1)
         progress = value
         if color then
@@ -699,11 +815,11 @@ return function(config)
         end
     end
 
-    local busy = false
-    local progressRun = 0
-
     local function resetButton()
-        progressRun += 1
+        if destroyed then
+            return
+        end
+        runId += 1
         progress = 0
         progressFill.Size = UDim2.fromScale(0, 1)
         progressFill.BackgroundColor3 = palette.accent
@@ -725,9 +841,14 @@ return function(config)
         }
     end
 
-    saveButton.MouseButton1Click:Connect(function()
+    bind(saveButton.MouseButton1Click, function()
         if busy then
             toast("warning", "Save already running", "Wait for the current save operation to finish.", 2.5)
+            return
+        end
+
+        if type(saveCallback) ~= "function" then
+            toast("error", "Save unavailable", "The save callback is no longer available.", 4)
             return
         end
 
@@ -736,52 +857,66 @@ return function(config)
 
         local options = buildOptions()
         busy = true
-        progressRun += 1
-        local thisRun = progressRun
+        runId += 1
+        local thisRun = runId
 
         saveButton.BackgroundColor3 = palette.field
         progressFill.BackgroundColor3 = palette.accent
         setProgress(0.04, "Preparing... 4%")
         setStatus("Saving", "busy", "Preparing " .. options.FilePath)
 
-        task.spawn(function()
+        spawnTracked(function()
             local target = 0.12
-            while busy and progressRun == thisRun and progress < 0.88 do
+            while not destroyed and busy and runId == thisRun and progress < 0.88 do
                 target = math.min(0.88, math.max(target, progress + 0.025))
                 setProgress(target, string.format("Saving... %d%%", math.floor(target * 100 + 0.5)))
                 task.wait(0.42)
             end
         end)
 
-        task.spawn(function()
+        spawnTracked(function()
             setProgress(0.09, "Preparing... 9%")
             task.wait()
+            if destroyed or runId ~= thisRun then
+                return
+            end
             setProgress(0.14, "Serializing... 14%")
 
-            local ok, result = pcall(config.onSave, options, setStatus, setProgress, toast)
-
-            if ok then
+            local callback = saveCallback
+            if type(callback) ~= "function" then
                 busy = false
+                setProgress(math.max(progress, 0.14), "Save failed", palette.danger)
+                setStatus("Failed", "error", "Save callback was unloaded.")
+                toast("error", "Save failed", "Save callback was unloaded.", 5)
+                return
+            end
+
+            local ok, result = pcall(callback, options, setStatus, setProgress, toast)
+            if destroyed or runId ~= thisRun then
+                return
+            end
+
+            busy = false
+            if ok then
                 setProgress(1, "Saved successfully", palette.success)
                 setStatus("Finished", "success", "Saved " .. options.FilePath)
                 toast("success", "Save complete", options.FilePath .. " was written successfully.", 4)
 
-                task.delay(1.4, function()
-                    if progressRun == thisRun then
+                delayTracked(1.4, function()
+                    if runId == thisRun then
                         resetButton()
                         setStatus("Ready", "success", "Ready for another save.")
                     end
                 end)
             else
-                busy = false
                 local errorText = tostring(result)
                 progressFill.BackgroundColor3 = palette.danger
                 setProgress(math.max(progress, 0.12), "Save failed", palette.danger)
                 setStatus("Failed", "error", errorText:sub(1, 180))
                 toast("error", "Save failed", errorText:sub(1, 220), 6)
 
-                task.delay(2.2, function()
-                    if progressRun == thisRun then
+                delayTracked(2.2, function()
+                    if runId == thisRun then
                         resetButton()
                         setStatus("Ready", "success", "Fix the error and try again.")
                     end
@@ -790,28 +925,34 @@ return function(config)
         end)
     end)
 
-    saveButton.MouseEnter:Connect(function()
+    bind(saveButton.MouseEnter, function()
         if not busy then
             tween(saveButton, 0.12, { BackgroundColor3 = palette.accentHover })
         end
     end)
 
-    saveButton.MouseLeave:Connect(function()
+    bind(saveButton.MouseLeave, function()
         if not busy then
             tween(saveButton, 0.12, { BackgroundColor3 = palette.accent })
         end
     end)
 
-    close.MouseButton1Click:Connect(function()
-        gui:Destroy()
+    bind(close.MouseButton1Click, function()
+        destroy("close")
     end)
 
-    close.MouseEnter:Connect(function()
-        tween(close, 0.12, { BackgroundColor3 = palette.danger, TextColor3 = Color3.new(1, 1, 1) })
+    bind(close.MouseEnter, function()
+        tween(close, 0.12, {
+            BackgroundColor3 = palette.danger,
+            TextColor3 = Color3.new(1, 1, 1),
+        })
     end)
 
-    close.MouseLeave:Connect(function()
-        tween(close, 0.12, { BackgroundColor3 = palette.card, TextColor3 = palette.muted })
+    bind(close.MouseLeave, function()
+        tween(close, 0.12, {
+            BackgroundColor3 = palette.card,
+            TextColor3 = palette.muted,
+        })
     end)
 
     local dragging = false
@@ -819,26 +960,32 @@ return function(config)
     local dragStart
     local startPosition
 
-    header.InputBegan:Connect(function(input)
+    bind(header.InputBegan, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
             dragStart = input.Position
             startPosition = main.Position
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
+
+            local endedConnection
+            endedConnection = input.Changed:Connect(function()
+                if destroyed or input.UserInputState == Enum.UserInputState.End then
                     dragging = false
+                    if endedConnection and endedConnection.Connected then
+                        endedConnection:Disconnect()
+                    end
                 end
             end)
+            connections[#connections + 1] = endedConnection
         end
     end)
 
-    header.InputChanged:Connect(function(input)
+    bind(header.InputChanged, function(input)
         if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
             dragInput = input
         end
     end)
 
-    UserInputService.InputChanged:Connect(function(input)
+    bind(UserInputService.InputChanged, function(input)
         if dragging and input == dragInput and dragStart and startPosition then
             local delta = input.Position - dragStart
             main.Position = UDim2.new(
@@ -857,18 +1004,20 @@ return function(config)
         Size = UDim2.fromOffset(560, 610),
     })
 
-    toast("success", "SaveInstance ready", "Configure your save and press Save instance.", 3)
-
-    return {
+    controller = {
         Gui = gui,
         SetStatus = setStatus,
         SetProgress = setProgress,
         Toast = toast,
         GetOptions = buildOptions,
-        Destroy = function()
-            if gui.Parent then
-                gui:Destroy()
-            end
+        IsDestroyed = function()
+            return destroyed
         end,
+        Destroy = destroy,
     }
+
+    env[singletonKey] = controller
+    toast("success", "SaveInstance ready", "Configure your save and press Save instance.", 3)
+
+    return controller
 end
