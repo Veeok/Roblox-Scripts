@@ -1,33 +1,32 @@
--- SaveInstance UI shell
--- UI only. Supply your own onSave callback.
--- Uses relative output names so the caller can keep writes inside its allowed workspace.
+-- SaveInstance UI
+-- UniversalSynSaveInstance UI integration shell
+-- Upstream credit: UniversalSynSaveInstance https://discord.gg/wx4ThpAsmw
 
 return function(config)
     config = config or {}
-    assert(type(config.onSave) == "function", "SaveInstanceUI requires config.onSave(options, setStatus)")
+    assert(type(config.onSave) == "function", "SaveInstanceUI requires config.onSave(options, setStatus, setProgress, toast)")
 
     local Players = game:GetService("Players")
     local TweenService = game:GetService("TweenService")
     local UserInputService = game:GetService("UserInputService")
+    local CoreGui = game:GetService("CoreGui")
 
     local player = Players.LocalPlayer
-    local parent = config.parent or (player and player:WaitForChild("PlayerGui"))
-    assert(parent, "No GUI parent available")
 
     local palette = {
-        bg = Color3.fromRGB(16, 17, 22),
-        bar = Color3.fromRGB(20, 21, 27),
-        card = Color3.fromRGB(27, 29, 37),
-        field = Color3.fromRGB(34, 36, 46),
-        border = Color3.fromRGB(52, 55, 68),
-        text = Color3.fromRGB(239, 241, 247),
+        bg = Color3.fromRGB(15, 16, 21),
+        header = Color3.fromRGB(20, 21, 28),
+        card = Color3.fromRGB(27, 29, 38),
+        field = Color3.fromRGB(34, 36, 47),
+        border = Color3.fromRGB(53, 56, 70),
+        text = Color3.fromRGB(240, 242, 248),
         muted = Color3.fromRGB(145, 150, 166),
         accent = Color3.fromRGB(91, 105, 255),
         accentHover = Color3.fromRGB(108, 121, 255),
         success = Color3.fromRGB(62, 181, 124),
         warning = Color3.fromRGB(219, 158, 64),
         danger = Color3.fromRGB(219, 78, 87),
-        off = Color3.fromRGB(66, 69, 82),
+        off = Color3.fromRGB(65, 68, 82),
     }
 
     local function new(className, props)
@@ -54,11 +53,14 @@ return function(config)
         })
     end
 
-    local function animate(object, duration, props)
-        local info = TweenInfo.new(duration, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-        local t = TweenService:Create(object, info, props)
-        t:Play()
-        return t
+    local function tween(object, duration, props)
+        local animation = TweenService:Create(
+            object,
+            TweenInfo.new(duration, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
+            props
+        )
+        animation:Play()
+        return animation
     end
 
     local function sanitize(value)
@@ -73,17 +75,166 @@ return function(config)
         return value:sub(1, 120)
     end
 
-    local existing = parent:FindFirstChild("SaveInstanceUI031026")
-    if existing then
-        existing:Destroy()
+    local function resolveParent()
+        if config.parent then
+            return config.parent
+        end
+
+        if type(gethui) == "function" then
+            local ok, result = pcall(gethui)
+            if ok and result then
+                return result
+            end
+        end
+
+        local okCore, core = pcall(function()
+            return CoreGui
+        end)
+        if okCore and core then
+            return core
+        end
+
+        if player then
+            local okGui, playerGui = pcall(function()
+                return player:WaitForChild("PlayerGui", 5)
+            end)
+            if okGui and playerGui then
+                return playerGui
+            end
+        end
+
+        error("SaveInstanceUI could not find a GUI parent")
+    end
+
+    local parent = resolveParent()
+
+    local old = parent:FindFirstChild("SaveInstanceUI031026")
+    if old then
+        old:Destroy()
     end
 
     local gui = new("ScreenGui", {
         Name = "SaveInstanceUI031026",
         ResetOnSpawn = false,
+        IgnoreGuiInset = false,
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
         Parent = parent,
     })
+
+    local protect = protectgui or (syn and syn.protect_gui)
+    if type(protect) == "function" then
+        pcall(protect, gui)
+    end
+
+    local toastHost = new("Frame", {
+        Name = "Toasts",
+        AnchorPoint = Vector2.new(1, 0),
+        Position = UDim2.new(1, -18, 0, 18),
+        Size = UDim2.fromOffset(330, 420),
+        BackgroundTransparency = 1,
+        ZIndex = 50,
+        Parent = gui,
+    })
+
+    new("UIListLayout", {
+        FillDirection = Enum.FillDirection.Vertical,
+        HorizontalAlignment = Enum.HorizontalAlignment.Right,
+        VerticalAlignment = Enum.VerticalAlignment.Top,
+        Padding = UDim.new(0, 8),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Parent = toastHost,
+    })
+
+    local toastOrder = 0
+
+    local function toast(kind, title, message, duration)
+        kind = kind or "info"
+        title = tostring(title or "Notice")
+        message = tostring(message or "")
+        duration = tonumber(duration) or 3.6
+
+        toastOrder += 1
+
+        local color = palette.accent
+        if kind == "success" then
+            color = palette.success
+        elseif kind == "warning" then
+            color = palette.warning
+        elseif kind == "error" then
+            color = palette.danger
+        end
+
+        local item = new("Frame", {
+            LayoutOrder = toastOrder,
+            Size = UDim2.fromOffset(0, 72),
+            BackgroundColor3 = palette.card,
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            ClipsDescendants = true,
+            ZIndex = 51,
+            Parent = toastHost,
+        })
+        corner(item, 10)
+        stroke(item, 0.25)
+
+        local bar = new("Frame", {
+            Size = UDim2.new(0, 4, 1, 0),
+            BackgroundColor3 = color,
+            BorderSizePixel = 0,
+            ZIndex = 52,
+            Parent = item,
+        })
+
+        new("TextLabel", {
+            Position = UDim2.fromOffset(16, 10),
+            Size = UDim2.new(1, -28, 0, 19),
+            BackgroundTransparency = 1,
+            Font = Enum.Font.GothamBold,
+            Text = title,
+            TextColor3 = palette.text,
+            TextSize = 12,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 52,
+            Parent = item,
+        })
+
+        new("TextLabel", {
+            Position = UDim2.fromOffset(16, 31),
+            Size = UDim2.new(1, -28, 0, 29),
+            BackgroundTransparency = 1,
+            Font = Enum.Font.Gotham,
+            Text = message,
+            TextColor3 = palette.muted,
+            TextSize = 10,
+            TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Top,
+            ZIndex = 52,
+            Parent = item,
+        })
+
+        tween(item, 0.22, {
+            Size = UDim2.fromOffset(320, 72),
+            BackgroundTransparency = 0,
+        })
+
+        task.delay(duration, function()
+            if not item.Parent then
+                return
+            end
+            tween(item, 0.2, {
+                Size = UDim2.fromOffset(0, 72),
+                BackgroundTransparency = 1,
+            })
+            task.delay(0.22, function()
+                if item.Parent then
+                    item:Destroy()
+                end
+            end)
+        end)
+
+        return item, bar
+    end
 
     local main = new("Frame", {
         AnchorPoint = Vector2.new(0.5, 0.5),
@@ -97,9 +248,9 @@ return function(config)
     corner(main, 14)
     stroke(main, 0.15)
 
-    local bar = new("Frame", {
+    local header = new("Frame", {
         Size = UDim2.new(1, 0, 0, 64),
-        BackgroundColor3 = palette.bar,
+        BackgroundColor3 = palette.header,
         BorderSizePixel = 0,
         Parent = main,
     })
@@ -107,25 +258,25 @@ return function(config)
     new("TextLabel", {
         BackgroundTransparency = 1,
         Position = UDim2.fromOffset(18, 10),
-        Size = UDim2.fromOffset(300, 23),
+        Size = UDim2.fromOffset(310, 23),
         Font = Enum.Font.GothamBold,
         Text = config.title or "Save Instance",
         TextSize = 19,
         TextColor3 = palette.text,
         TextXAlignment = Enum.TextXAlignment.Left,
-        Parent = bar,
+        Parent = header,
     })
 
     new("TextLabel", {
         BackgroundTransparency = 1,
         Position = UDim2.fromOffset(18, 34),
-        Size = UDim2.fromOffset(330, 17),
+        Size = UDim2.fromOffset(350, 17),
         Font = Enum.Font.Gotham,
-        Text = "Clean save configuration panel",
+        Text = "UniversalSynSaveInstance control panel",
         TextSize = 11,
         TextColor3 = palette.muted,
         TextXAlignment = Enum.TextXAlignment.Left,
-        Parent = bar,
+        Parent = header,
     })
 
     local status = new("TextLabel", {
@@ -138,7 +289,7 @@ return function(config)
         Text = "READY",
         TextSize = 10,
         TextColor3 = Color3.new(1, 1, 1),
-        Parent = bar,
+        Parent = header,
     })
     corner(status, 8)
 
@@ -153,7 +304,7 @@ return function(config)
         Text = "X",
         TextSize = 12,
         TextColor3 = palette.muted,
-        Parent = bar,
+        Parent = header,
     })
     corner(close, 8)
 
@@ -217,13 +368,13 @@ return function(config)
     end
 
     local state = {
-        binary = true,
-        avoidOverwrite = true,
-        decompile = true,
-        nilInstances = false,
-        removePlayerCharacters = false,
-        isolateStarterPlayer = false,
-        mode = "optimized",
+        binary = config.binary ~= false,
+        avoidOverwrite = config.avoidOverwrite ~= false,
+        decompile = config.decompile ~= false,
+        nilInstances = config.nilInstances == true,
+        removePlayerCharacters = config.removePlayerCharacters == true,
+        isolateStarterPlayer = config.isolateStarterPlayer == true,
+        mode = config.mode or "optimized",
     }
 
     section("Output")
@@ -292,7 +443,7 @@ return function(config)
     local function refreshModes()
         for mode, button in pairs(modeButtons) do
             local selected = state.mode == mode
-            animate(button, 0.15, {
+            tween(button, 0.15, {
                 BackgroundColor3 = selected and palette.accent or palette.field,
                 TextColor3 = selected and Color3.new(1, 1, 1) or palette.muted,
             })
@@ -401,8 +552,8 @@ return function(config)
         toggle.MouseButton1Click:Connect(function()
             state[key] = not state[key]
             local enabled = state[key]
-            animate(toggle, 0.15, { BackgroundColor3 = enabled and palette.accent or palette.off })
-            animate(knob, 0.15, {
+            tween(toggle, 0.15, { BackgroundColor3 = enabled and palette.accent or palette.off })
+            tween(knob, 0.15, {
                 Position = enabled and UDim2.new(1, -21, 0.5, 0) or UDim2.fromOffset(3, 12),
             })
             if onToggleChanged[key] then
@@ -413,18 +564,18 @@ return function(config)
 
     section("Format")
     local formatCard = listCard(116)
-    toggleRow(formatCard, 1, "Binary format", "Use .rbxl instead of XML .rbxlx", "binary", true)
-    toggleRow(formatCard, 2, "Avoid overwrite", "Ask the save callback not to replace an existing file", "avoidOverwrite", true)
+    toggleRow(formatCard, 1, "Binary format", "Use .rbxl instead of XML .rbxlx", "binary", state.binary)
+    toggleRow(formatCard, 2, "Avoid overwrite", "Do not silently replace an existing save", "avoidOverwrite", state.avoidOverwrite)
 
     section("Content")
     local contentCard = listCard(220)
-    toggleRow(contentCard, 1, "Decompile scripts", "Request script source when supported", "decompile", true)
-    toggleRow(contentCard, 2, "Nil instances", "Include supported nil-parented instances", "nilInstances", false)
-    toggleRow(contentCard, 3, "Remove player characters", "Exclude player character models", "removePlayerCharacters", false)
-    toggleRow(contentCard, 4, "Isolate StarterPlayer", "Enable StarterPlayer isolation", "isolateStarterPlayer", false)
+    toggleRow(contentCard, 1, "Decompile scripts", "Request script source when supported", "decompile", state.decompile)
+    toggleRow(contentCard, 2, "Nil instances", "Include supported nil-parented instances", "nilInstances", state.nilInstances)
+    toggleRow(contentCard, 3, "Remove player characters", "Exclude player character models", "removePlayerCharacters", state.removePlayerCharacters)
+    toggleRow(contentCard, 4, "Isolate StarterPlayer", "Enable StarterPlayer isolation", "isolateStarterPlayer", state.isolateStarterPlayer)
 
     section("Save")
-    local actionCard = card(150)
+    local actionCard = card(154)
 
     new("TextLabel", {
         BackgroundTransparency = 1,
@@ -462,7 +613,7 @@ return function(config)
         Position = UDim2.fromOffset(14, 79),
         Size = UDim2.new(1, -28, 0, 18),
         Font = Enum.Font.Gotham,
-        Text = "Ready to pass options to your save callback.",
+        Text = "Ready. Files are written inside your executor workspace.",
         TextSize = 10,
         TextColor3 = palette.muted,
         TextXAlignment = Enum.TextXAlignment.Left,
@@ -475,13 +626,30 @@ return function(config)
         BackgroundColor3 = palette.accent,
         BorderSizePixel = 0,
         AutoButtonColor = false,
+        Text = "",
+        ClipsDescendants = true,
+        Parent = actionCard,
+    })
+    corner(saveButton, 9)
+
+    local progressFill = new("Frame", {
+        Size = UDim2.fromScale(0, 1),
+        BackgroundColor3 = palette.accent,
+        BorderSizePixel = 0,
+        ZIndex = saveButton.ZIndex + 1,
+        Parent = saveButton,
+    })
+
+    local saveLabel = new("TextLabel", {
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
         Font = Enum.Font.GothamBold,
         Text = "Save instance",
         TextSize = 12,
         TextColor3 = Color3.new(1, 1, 1),
-        Parent = actionCard,
+        ZIndex = saveButton.ZIndex + 2,
+        Parent = saveButton,
     })
-    corner(saveButton, 9)
 
     local function currentPath()
         return sanitize(fileBox.Text) .. (state.binary and ".rbxl" or ".rbxlx")
@@ -499,6 +667,7 @@ return function(config)
     refreshPath()
 
     local function setStatus(text, kind, message)
+        kind = kind or "success"
         local color = palette.success
         if kind == "warning" then
             color = palette.warning
@@ -507,23 +676,43 @@ return function(config)
         elseif kind == "busy" then
             color = palette.accent
         end
+
         status.Text = string.upper(tostring(text or "READY"))
-        animate(status, 0.15, { BackgroundColor3 = color })
+        tween(status, 0.15, { BackgroundColor3 = color })
         if message then
             detail.Text = tostring(message)
         end
     end
 
-    local busy = false
-    saveButton.MouseButton1Click:Connect(function()
-        if busy then
-            return
+    local progress = 0
+    local function setProgress(value, label, color)
+        value = math.clamp(tonumber(value) or 0, 0, 1)
+        progress = value
+        if color then
+            progressFill.BackgroundColor3 = color
         end
+        tween(progressFill, 0.22, { Size = UDim2.fromScale(value, 1) })
+        if label then
+            saveLabel.Text = tostring(label)
+        else
+            saveLabel.Text = string.format("Saving... %d%%", math.floor(value * 100 + 0.5))
+        end
+    end
 
-        fileBox.Text = sanitize(fileBox.Text)
-        refreshPath()
+    local busy = false
+    local progressRun = 0
 
-        local options = {
+    local function resetButton()
+        progressRun += 1
+        progress = 0
+        progressFill.Size = UDim2.fromScale(0, 1)
+        progressFill.BackgroundColor3 = palette.accent
+        saveButton.BackgroundColor3 = palette.accent
+        saveLabel.Text = "Save instance"
+    end
+
+    local function buildOptions()
+        return {
             FilePath = currentPath(),
             Binary = state.binary,
             AvoidFileOverwrite = state.avoidOverwrite,
@@ -534,35 +723,82 @@ return function(config)
             ShowStatus = false,
             mode = state.mode,
         }
+    end
 
+    saveButton.MouseButton1Click:Connect(function()
+        if busy then
+            toast("warning", "Save already running", "Wait for the current save operation to finish.", 2.5)
+            return
+        end
+
+        fileBox.Text = sanitize(fileBox.Text)
+        refreshPath()
+
+        local options = buildOptions()
         busy = true
-        saveButton.Text = "Saving..."
-        animate(saveButton, 0.15, { BackgroundColor3 = palette.off })
-        setStatus("Saving", "busy", "The callback is processing " .. options.FilePath)
+        progressRun += 1
+        local thisRun = progressRun
+
+        saveButton.BackgroundColor3 = palette.field
+        progressFill.BackgroundColor3 = palette.accent
+        setProgress(0.04, "Preparing... 4%")
+        setStatus("Saving", "busy", "Preparing " .. options.FilePath)
 
         task.spawn(function()
-            local ok, err = pcall(config.onSave, options, setStatus)
-            busy = false
-            saveButton.Text = "Save instance"
-            animate(saveButton, 0.15, { BackgroundColor3 = palette.accent })
+            local target = 0.12
+            while busy and progressRun == thisRun and progress < 0.88 do
+                target = math.min(0.88, math.max(target, progress + 0.025))
+                setProgress(target, string.format("Saving... %d%%", math.floor(target * 100 + 0.5)))
+                task.wait(0.42)
+            end
+        end)
 
-            if not ok then
-                setStatus("Failed", "error", tostring(err):sub(1, 160))
-            elseif status.Text == "SAVING" then
-                setStatus("Finished", "success", "The callback finished. Verify the output file in the configured workspace.")
+        task.spawn(function()
+            setProgress(0.09, "Preparing... 9%")
+            task.wait()
+            setProgress(0.14, "Serializing... 14%")
+
+            local ok, result = pcall(config.onSave, options, setStatus, setProgress, toast)
+
+            if ok then
+                busy = false
+                setProgress(1, "Saved successfully", palette.success)
+                setStatus("Finished", "success", "Saved " .. options.FilePath)
+                toast("success", "Save complete", options.FilePath .. " was written successfully.", 4)
+
+                task.delay(1.4, function()
+                    if progressRun == thisRun then
+                        resetButton()
+                        setStatus("Ready", "success", "Ready for another save.")
+                    end
+                end)
+            else
+                busy = false
+                local errorText = tostring(result)
+                progressFill.BackgroundColor3 = palette.danger
+                setProgress(math.max(progress, 0.12), "Save failed", palette.danger)
+                setStatus("Failed", "error", errorText:sub(1, 180))
+                toast("error", "Save failed", errorText:sub(1, 220), 6)
+
+                task.delay(2.2, function()
+                    if progressRun == thisRun then
+                        resetButton()
+                        setStatus("Ready", "success", "Fix the error and try again.")
+                    end
+                end)
             end
         end)
     end)
 
     saveButton.MouseEnter:Connect(function()
         if not busy then
-            animate(saveButton, 0.12, { BackgroundColor3 = palette.accentHover })
+            tween(saveButton, 0.12, { BackgroundColor3 = palette.accentHover })
         end
     end)
 
     saveButton.MouseLeave:Connect(function()
         if not busy then
-            animate(saveButton, 0.12, { BackgroundColor3 = palette.accent })
+            tween(saveButton, 0.12, { BackgroundColor3 = palette.accent })
         end
     end)
 
@@ -571,11 +807,11 @@ return function(config)
     end)
 
     close.MouseEnter:Connect(function()
-        animate(close, 0.12, { BackgroundColor3 = palette.danger, TextColor3 = Color3.new(1, 1, 1) })
+        tween(close, 0.12, { BackgroundColor3 = palette.danger, TextColor3 = Color3.new(1, 1, 1) })
     end)
 
     close.MouseLeave:Connect(function()
-        animate(close, 0.12, { BackgroundColor3 = palette.card, TextColor3 = palette.muted })
+        tween(close, 0.12, { BackgroundColor3 = palette.card, TextColor3 = palette.muted })
     end)
 
     local dragging = false
@@ -583,7 +819,7 @@ return function(config)
     local dragStart
     local startPosition
 
-    bar.InputBegan:Connect(function(input)
+    header.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
             dragStart = input.Position
@@ -596,7 +832,7 @@ return function(config)
         end
     end)
 
-    bar.InputChanged:Connect(function(input)
+    header.InputChanged:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
             dragInput = input
         end
@@ -616,26 +852,23 @@ return function(config)
 
     main.BackgroundTransparency = 1
     main.Size = UDim2.fromOffset(540, 590)
-    animate(main, 0.25, {
+    tween(main, 0.25, {
         BackgroundTransparency = 0,
         Size = UDim2.fromOffset(560, 610),
     })
 
+    toast("success", "SaveInstance ready", "Configure your save and press Save instance.", 3)
+
     return {
         Gui = gui,
         SetStatus = setStatus,
-        GetOptions = function()
-            return {
-                FilePath = currentPath(),
-                Binary = state.binary,
-                AvoidFileOverwrite = state.avoidOverwrite,
-                Decompile = state.decompile,
-                NilInstances = state.nilInstances,
-                RemovePlayerCharacters = state.removePlayerCharacters,
-                IsolateStarterPlayer = state.isolateStarterPlayer,
-                ShowStatus = false,
-                mode = state.mode,
-            }
+        SetProgress = setProgress,
+        Toast = toast,
+        GetOptions = buildOptions,
+        Destroy = function()
+            if gui.Parent then
+                gui:Destroy()
+            end
         end,
     }
 end
