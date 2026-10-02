@@ -34,14 +34,29 @@ local function executorInfo()
     return tostring(name or "Unknown"), tostring(version or "")
 end
 
+local function getOptionsConstructor()
+    local ok, constructor = pcall(function()
+        return SaveInstanceOptions and SaveInstanceOptions.new
+    end)
+
+    if not ok or type(constructor) ~= "function" then
+        return nil
+    end
+
+    return constructor
+end
+
 local function requireVoltSaveApi()
     if type(saveinstance) ~= "function" then
         error("Volt native saveinstance() is unavailable. Update Volt and make sure it is attached before running this script.")
     end
 
-    if type(SaveInstanceOptions) ~= "table" or type(SaveInstanceOptions.new) ~= "function" then
+    local constructor = getOptionsConstructor()
+    if not constructor then
         error("Volt SaveInstanceOptions.new() is unavailable. Volt 1.3+ is required.")
     end
+
+    return constructor
 end
 
 local function normalizePath(rawPath)
@@ -133,8 +148,8 @@ local function verifyOutput(path)
     return false, "Volt saveinstance() returned but the expected output file was not found: " .. path
 end
 
-local function buildNativeOptions(options, outputPath)
-    local native = SaveInstanceOptions.new()
+local function buildNativeOptions(options, outputPath, constructor)
+    local native = constructor()
 
     native.FilePath = outputPath
 
@@ -158,7 +173,7 @@ end
 return function(options, setStatus, setProgress, toast)
     options = options or {}
 
-    requireVoltSaveApi()
+    local constructor = requireVoltSaveApi()
 
     local executorName, executorVersion = executorInfo()
     local outputPath = normalizePath(options.FilePath)
@@ -198,7 +213,7 @@ return function(options, setStatus, setProgress, toast)
     )
     progress(setProgress, 0.12, "Preparing Volt save... 12%")
 
-    local nativeOptions = buildNativeOptions(options, outputPath)
+    local nativeOptions = buildNativeOptions(options, outputPath, constructor)
 
     progress(setProgress, 0.24, "Serializing place... 24%")
 
